@@ -121,7 +121,7 @@
 
 /* Custom token highlighting styles */
 .bg-token-highlight {
-  background-color: color-mix(in srgb, var(--primary) 10%, transparent);
+  background-color: color-mix(in srgb, var(--chart-3) 10%, transparent);
 }
 
 .bg-token-hover {
