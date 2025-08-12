@@ -1,6 +1,8 @@
 # Token Hover Peek
 An interactive text tokenizer visualization tool that helps you understand how different AI models break down text into tokens. Perfect for developers working with Large Language Models (LLMs) who need to analyze token usage, optimize prompts, or understand tokenization patterns.
 
+## Live Demo: [gen-ai-in-js-cohort.vercel.app](https://gen-ai-in-js-cohort.vercel.app)
+
 ### Features
 
 - **Interactive Tokenization**: Visualize how text gets broken down into tokens in real-time
