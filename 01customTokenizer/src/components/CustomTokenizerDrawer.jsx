@@ -25,6 +25,7 @@ export function CustomTokenizerDrawer({ onTokenizerSaved }) {
   const [newTokens, setNewTokens] = useState('');
   const [editingId, setEditingId] = useState(null);
   const { toast } = useToast();
+  const [nameError, setNameError] = useState(false);
 
   useEffect(() => {
     loadTokenizers();
@@ -49,10 +50,21 @@ export function CustomTokenizerDrawer({ onTokenizerSaved }) {
   };
 
   const handleSaveTokenizer = () => {
-    if (!newTokenizerName.trim() || !newTokens.trim()) {
+    if (!newTokenizerName.trim()) {
+      setNameError(true);
       toast({
         title: 'Error',
-        description: 'Please provide both name and tokens',
+        description: 'Please provide a name for the tokenizer',
+        variant: 'destructive',
+      });
+      return;
+    } else {
+      setNameError(false);
+    }
+    if (!newTokens.trim()) {
+      toast({
+        title: 'Error',
+        description: 'Please provide tokens',
         variant: 'destructive',
       });
       return;
@@ -117,6 +129,32 @@ export function CustomTokenizerDrawer({ onTokenizerSaved }) {
     setEditingId(null);
   };
 
+  // File upload handler for .txt files
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.type !== 'text/plain' && !file.name.endsWith('.txt')) {
+      toast({
+        title: 'Invalid file type',
+        description: 'Only .txt files can be uploaded',
+        variant: 'destructive',
+      });
+      e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target.result;
+      setNewTokens(text);
+      toast({
+        title: 'File uploaded',
+        description: 'Tokens loaded from file',
+      });
+      e.target.value = '';
+    };
+    reader.readAsText(file);
+  };
+
   return (
     <Drawer open={isOpen} onOpenChange={setIsOpen}>
       <DrawerTrigger asChild>
@@ -147,8 +185,12 @@ export function CustomTokenizerDrawer({ onTokenizerSaved }) {
                   <Input
                     id="tokenizer-name"
                     value={newTokenizerName}
-                    onChange={(e) => setNewTokenizerName(e.target.value)}
+                    onChange={(e) => {
+                      setNewTokenizerName(e.target.value);
+                      if (e.target.value.trim()) setNameError(false);
+                    }}
                     placeholder="My Custom Tokenizer"
+                    style={nameError ? { borderColor: 'red', boxShadow: '0 0 0 2px #ef4444' } : {}}
                   />
                 </div>
 
@@ -163,6 +205,26 @@ export function CustomTokenizerDrawer({ onTokenizerSaved }) {
                   />
                   <p className="text-xs text-muted-foreground mt-1">
                     Enter each token on a new line
+                  </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      type="file"
+                      accept=".txt"
+                      id="token-upload"
+                      style={{ display: 'none' }}
+                      onChange={handleFileUpload}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => document.getElementById('token-upload').click()}
+                    >
+                      Upload .txt File
+                    </Button>
+                    <span className="text-xs text-muted-foreground">(.txt files only)</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    You can upload a .txt file to fill tokens automatically. Only .txt files are supported.
                   </p>
                 </div>
 

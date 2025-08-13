@@ -1,17 +1,23 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { getEncoding } from 'js-tiktoken';
+import "../tokenColors.css";
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { CustomTokenizerDrawer } from './CustomTokenizerDrawer';
 import { ModelSelector } from './ModelSelector';
+import "./tokenHoverPeek.css"
+import { useTokenize } from '@/hooks/useTokenize';
 
 export function TokenHoverPeek() {
+  // Large color palette (should match tokenColors.css count)
+  const TOKEN_COLOR_COUNT = 25;
+  function getTokenColorVar(idx) {
+    return `var(--token-color-${idx % TOKEN_COLOR_COUNT})`;
+  }
   const [inputText, setInputText] = useState('Enter your text here to see how it gets tokenized. Try pasting some code, a paragraph, or any text you want to analyze!');
   const [tokens, setTokens] = useState([]);
   const [hoveredTokenId, setHoveredTokenId] = useState(null);
-  const [tokenPositions, setTokenPositions] = useState(new Map());
   const [showTokenIds, setShowTokenIds] = useState(false);
   const [currentModel, setCurrentModel] = useState({
     id: 'cl100k_base',
@@ -24,99 +30,10 @@ export function TokenHoverPeek() {
   const inputRef = useRef(null);
   const outputRef = useRef(null);
 
-  const tokenizeText = useCallback((text, model) => {
-    if (!text.trim()) {
-      setTokens([]);
-      return;
-    }
-
-    try {
-      if (model.type === 'custom' && model.customTokens) {
-        // Custom tokenizer logic
-        const tokenList = [];
-        let currentPosition = 0;
-        let tokenIndex = 0;
-        
-        while (currentPosition < text.length) {
-          let matched = false;
-          
-          // Try to match the longest possible token first
-          const sortedTokens = [...model.customTokens].sort((a, b) => b.length - a.length);
-          
-          for (const token of sortedTokens) {
-            if (text.slice(currentPosition, currentPosition + token.length) === token) {
-              tokenList.push({
-                id: tokenIndex,
-                tokenId: model.customTokens.indexOf(token), // Use index as token ID for custom tokens
-                text: token,
-                start: currentPosition,
-                end: currentPosition + token.length
-              });
-              
-              currentPosition += token.length;
-              tokenIndex++;
-              matched = true;
-              break;
-            }
-          }
-          
-          // If no token matched, treat single character as token
-          if (!matched) {
-            const char = text[currentPosition];
-            tokenList.push({
-              id: tokenIndex,
-              tokenId: -1, // Special ID for unmatched characters
-              text: char,
-              start: currentPosition,
-              end: currentPosition + 1
-            });
-            
-            currentPosition++;
-            tokenIndex++;
-          }
-        }
-        
-        setTokens(tokenList);
-      } else {
-        // Built-in tiktoken encoding
-        const encodingName =
-            model.encoding === 'cl100k_base' ||
-            model.encoding === 'p50k_base' ||
-            model.encoding === 'r50k_base'
-            ? model.encoding
-            : 'cl100k_base';
-
-        const encoding = getEncoding(encodingName);
-        const encoded = encoding.encode(text);
-        const tokenList = [];
-        
-        let currentPosition = 0;
-        encoded.forEach((tokenId, index) => {
-          const decoded = encoding.decode([tokenId]);
-          const start = currentPosition;
-          const end = currentPosition + decoded.length;
-          
-          tokenList.push({
-            id: index,
-            tokenId: tokenId,
-            text: decoded,
-            start,
-            end
-          });
-          
-          currentPosition = end;
-        });
-        
-        setTokens(tokenList);
-      }
-    } catch (error) {
-      console.error('Tokenization error:', error);
-      setTokens([]);
-    }
-  }, []);
+  const tokenizeText = useTokenize();
 
   useEffect(() => {
-    tokenizeText(inputText, currentModel);
+    tokenizeText(inputText, currentModel, setTokens);
   }, [inputText, currentModel, tokenizeText]);
 
   const handleModelChange = (model) => {
@@ -137,8 +54,6 @@ export function TokenHoverPeek() {
       const tokenId = parseInt(element.getAttribute('data-token-id') || '0');
       positions.set(tokenId, element.getBoundingClientRect());
     });
-    
-    setTokenPositions(positions);
   }, []);
 
   useEffect(() => {
@@ -160,6 +75,10 @@ export function TokenHoverPeek() {
       if (token) {
         // Highlight corresponding text in input
         inputRef.current.focus();
+        inputRef.current.style.setProperty(
+          '--token-highlight-color',
+          getTokenColorVar(token.id)
+        );
         inputRef.current.setSelectionRange(token.start, token.end);
       }
     }
@@ -170,11 +89,14 @@ export function TokenHoverPeek() {
       <span
         key={token.id}
         data-token-id={token.id}
-        className={`inline-block px-1 py-0.5 m-0.5 rounded-sm border cursor-pointer transition-all duration-200 font-mono text-sm ${
-          hoveredTokenId === token.id
-            ? 'bg-token-highlight border-token-border shadow-sm'
-            : 'bg-token-hover border-transparent hover:border-token-border hover:bg-token-highlight'
-        }`}
+        style={{
+          backgroundColor: getTokenColorVar(token.id),
+          borderColor: hoveredTokenId === token.id ? getTokenColorVar(token.id) : 'transparent',
+          color: '#222',
+          boxShadow: hoveredTokenId === token.id ? `0 0 0 2px ${getTokenColorVar(token.id)}` : undefined,
+          transition: 'box-shadow 0.2s',
+        }}
+        className={`inline-block px-1 py-0.5 m-0.5 rounded-sm border cursor-pointer transition-all duration-200 font-mono text-sm`}
         onMouseEnter={() => handleTokenHover(token.id)}
         onMouseLeave={() => handleTokenHover(null)}
         title={`Token ${token.id}: ID ${token.tokenId} - "${token.text}" (${token.end - token.start} chars)`}
@@ -190,11 +112,14 @@ export function TokenHoverPeek() {
         {tokens.map((token) => (
           <div
             key={token.id}
-            className={`flex items-center justify-between p-2 rounded-md cursor-pointer transition-all duration-200 border ${
-              hoveredTokenId === token.id
-                ? 'bg-token-highlight border-token-border'
-                : 'hover:bg-token-hover border-transparent'
-            }`}
+            style={{
+              backgroundColor: getTokenColorVar(token.id),
+              borderColor: hoveredTokenId === token.id ? getTokenColorVar(token.id) : 'transparent',
+              boxShadow: hoveredTokenId === token.id ? `0 0 0 2px ${getTokenColorVar(token.id)}` : undefined,
+              color: '#222',
+              transition: 'box-shadow 0.2s',
+            }}
+            className={`flex items-center justify-between p-2 rounded-md cursor-pointer transition-all duration-200 border`}
             onMouseEnter={() => handleTokenHover(token.id)}
             onMouseLeave={() => handleTokenHover(null)}
           >

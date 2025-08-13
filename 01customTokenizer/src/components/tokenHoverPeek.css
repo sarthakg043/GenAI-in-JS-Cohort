@@ -1,0 +1,4 @@
+textarea::selection {
+  background: var(--token-highlight-color, yellow);
+  color: black;
+}
