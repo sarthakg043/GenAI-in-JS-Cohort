@@ -87,24 +87,78 @@ export default function Home() {
       setLoading(false);
     }
   };
+  const summarizeTextStream = async () => {
+    if (!message.trim()) {
+      setError("Please enter some text to summarize.");
+      return;
+    }
+    if (!apiKey.trim()) {
+      setError("Please enter an API key.");
+      return;
+    }
+    if (!service) {
+      setError("Please select an AI service.");
+      return;
+    }
+    
+    setLoading(true);
+    setStreaming(true);
+    setSummary("");
+    setError("");
+    try{
+      const response = await fetch("/api/chat-stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ 
+          message, 
+          apiKey, 
+          service 
+        }),
+      });
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const {done, value} =  await reader.read()
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n').filter(line => line.trim() !== '');
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const recievedData = JSON.parse(line.slice(6));
+            setSummary(prev => prev + recievedData.content);
+          }
+        }
+      }
+
+    } catch (error) {
+      console.error("Error summarizing text:", error);
+      setError("Failed to summarize text. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-between p-24">
+    <div className="flex min-h-screen flex-col items-center justify-between p-2 md:p-24">
       <main className="flex w-full flex-1 flex-col items-center justify-center text-center">
         <div className="w-full grid grid-cols-6 items-center">
           {/* Left side (empty) */}
-          <div className="col-span-1"></div>
+          <div className="col-span-6 md:col-span-1"></div>
 
           {/* Center content */}
           <div className="text-center col-span-4">
-            <h1 className="text-6xl font-bold">Text Summarizer</h1>
-            <p className="mt-3 text-2xl">Summarize your text with AI</p>
+            <h1 className="text-2xl md:text-6xl font-bold">Text Summarizer</h1>
+            <p className="mt-3 text-base md:text-2xl">Summarize your text with AI</p>
           </div>
 
           {/* Right side button */}
-          <div className="flex justify-end col-span-1">
+          <div className="flex justify-end col-span-2 md:col-span-1">
             <button 
-              className="mt-4 px-6 py-2 rounded-lg transition-colors"
+              className="mt-4 px-3 md:px-6 py-2 rounded-lg transition-colors text-sm md:text-base"
               style={{
                 backgroundColor: 'var(--button-bg)',
                 color: 'var(--button-text)'
@@ -129,18 +183,34 @@ export default function Home() {
             onChange={(e) => setMessage(e.target.value)}
             rows="4"
           ></textarea>
-          <button 
-            className="mt-4 px-6 py-2 rounded-lg transition-colors"
-            style={{
-              backgroundColor: 'var(--button-bg)',
-              color: 'var(--button-text)'
-            }}
-            onMouseEnter={(e) => e.target.style.backgroundColor = 'var(--button-hover)'}
-            onMouseLeave={(e) => e.target.style.backgroundColor = 'var(--button-bg)'}
-            onClick={summarizeText}
+          <div
+            className="my-4 w-full max-w-4xl flex flex-wrap justify-evenly items-center"
           >
-            Summarize
-          </button>
+            <button 
+              className="w-2/5 min-w-36 mt-4 px-6 py-2 rounded-lg transition-colors"
+              style={{
+                backgroundColor: 'var(--button-bg)',
+                color: 'var(--button-text)'
+              }}
+              onMouseEnter={(e) => e.target.style.backgroundColor = 'var(--button-hover)'}
+              onMouseLeave={(e) => e.target.style.backgroundColor = 'var(--button-bg)'}
+              onClick={summarizeText}
+            >
+              Summarize
+            </button>
+            <button 
+              className="w-2/5 min-w-36 mt-4 px-6 py-2 rounded-lg transition-colors"
+              style={{
+                backgroundColor: 'var(--button-bg)',
+                color: 'var(--button-text)'
+              }}
+              onMouseEnter={(e) => e.target.style.backgroundColor = 'var(--button-hover)'}
+              onMouseLeave={(e) => e.target.style.backgroundColor = 'var(--button-bg)'}
+              onClick={summarizeTextStream}
+            >
+              Summarize with Streaming
+            </button>
+          </div>
         </div>
         {loading && <p className="mt-4 text-blue-500">Summarizing...</p>}
         {error && <p className="mt-4 text-red-500">{error}</p>}
