@@ -187,16 +187,26 @@ async function main(aiClient, modelName) {
 
     Rules:
     - Strictly follow the output JSON format
-    - Always follow the output in sequence that is START, THINK, OBSERVE and OUTPUT.
+    - IMPORTANT: Return ONLY ONE JSON object per response, not multiple JSON objects i.e. Only one step whether START or THINK or OUTPUT or OBSERVE or TOOL
+    - Always follow the output in sequence that is START, THINK, OBSERVE and OUTPUT but remember to give only one object at a time and wait for other step.
     - Always perform only one step at a time and wait for other step.
-    - Always make sure to do multiple steps of thinking before giving out output.
+    - Always make sure to do multiple steps of thinking before giving out output but give one step at a time only and wait for the next step then proceed.
     - For every tool call always wait for the OBSERVE which contains the output from tool
     - When cloning websites, be helpful and suggest serving the website after cloning
     - Always provide clear instructions and next steps to the user
     - Use JSON array format for multiple arguments when possible
+    - Never ever give more than one object in one response, always wait for the next step
 
     Output JSON Format:
     { "step": "START | THINK | OUTPUT | OBSERVE | TOOL" , "content": "string", "tool_name": "string", "input": "string" }
+
+    CRITICAL: 
+    - You MUST respond with ONLY ONE valid JSON object in the exact format above per response. 
+    - Do not include any text before or after the JSON. 
+    - Do not use markdown code blocks. 
+    - Do not add explanations. 
+    - Do not return multiple JSON objects in one response.
+    - Just pure JSON - ONE object only.
 
     Examples:
     
@@ -279,12 +289,119 @@ async function main(aiClient, modelName) {
 
     try {
       while (true) {
-    // Use the AI to generate the website cloning agent response
-    const response = await aiClient.chat.completions.create({
-      model: modelName,
-      messages: messages,
-    });        const rawContent = response.choices[0].message.content;
-        const parsedContent = JSON.parse(rawContent);
+        // Use the AI to generate the website cloning agent response
+        let response;
+        let rawContent;
+        
+        try {
+          response = await aiClient.chat.completions.create({
+            model: modelName,
+            messages: messages,
+            temperature: 0.7,
+          });
+          console.log(messages);
+          rawContent = response.choices[0].message.content;
+        } catch (apiError) {
+          if (apiError.status === 429) {
+            console.log('⏳ Rate limit reached. Waiting 2 seconds before retrying...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            continue;
+          } else if (apiError.status >= 500) {
+            console.log('🔄 Server error. Retrying in 1 second...');
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            continue;
+          } else {
+            throw apiError;
+          }
+        }
+        
+        // Debug: Log the raw response to see what we're getting
+        console.log('🔍 Raw AI Response:', rawContent);
+        
+        // Handle undefined or null responses
+        if (!rawContent) {
+          console.log('❌ Empty response from AI');
+          continue;
+        }
+    
+    let parsedContent;
+    try {
+      parsedContent = JSON.parse(rawContent);
+    } catch (jsonError) {
+      console.log('❌ JSON Parse Error:', jsonError.message);
+      
+      // Try to extract the first JSON object from the response
+      try {
+        const lines = rawContent.split('\n');
+        let jsonLines = [];
+        let braceCount = 0;
+        let inJson = false;
+        
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (trimmedLine.startsWith('{')) {
+            if (inJson) {
+              // We hit a new JSON object while parsing another, so parse the current one
+              const jsonStr = jsonLines.join('\n');
+              try {
+                parsedContent = JSON.parse(jsonStr);
+                console.log('✅ Successfully extracted first JSON object from response');
+                break;
+              } catch (parseError) {
+                // Continue to try the new JSON object
+              }
+            }
+            inJson = true;
+            braceCount = 0;
+            jsonLines = [line];
+          } else if (inJson) {
+            jsonLines.push(line);
+          }
+          
+          if (inJson) {
+            braceCount += (line.match(/\{/g) || []).length;
+            braceCount -= (line.match(/\}/g) || []).length;
+            
+            if (braceCount === 0) {
+              // We found a complete JSON object
+              const jsonStr = jsonLines.join('\n');
+              try {
+                parsedContent = JSON.parse(jsonStr);
+                console.log('✅ Successfully extracted first JSON object from response');
+                break;
+              } catch (extractError) {
+                console.log('❌ Failed to parse extracted JSON, continuing...');
+                jsonLines = [];
+                inJson = false;
+              }
+            }
+          }
+        }
+        
+        // If we still don't have parsed content, try to find any JSON object in the string
+        if (!parsedContent) {
+          const jsonMatches = rawContent.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
+          if (jsonMatches) {
+            for (const match of jsonMatches) {
+              try {
+                parsedContent = JSON.parse(match);
+                console.log('✅ Successfully parsed JSON using regex match');
+                break;
+              } catch (regexError) {
+                continue;
+              }
+            }
+          }
+        }
+      } catch (parseError) {
+        console.log('❌ Error during JSON extraction:', parseError.message);
+      }
+      
+      if (!parsedContent) {
+        console.log('❌ No valid JSON found in response');
+        continue;
+      }
+    }
 
         messages.push({
           role: 'assistant',
@@ -317,12 +434,37 @@ async function main(aiClient, modelName) {
           // Handle multiple arguments by parsing JSON array or comma-separated values
           let responseFromTool;
           try {
-            // Try to parse as JSON array first
-            const parsedInput = JSON.parse(toolInput);
-            if (Array.isArray(parsedInput)) {
-              responseFromTool = await TOOL_MAP[toolToCall](...parsedInput);
+            // First check if toolInput is already an object (from JSON parsing)
+            if (typeof toolInput === 'object' && toolInput !== null) {
+              // Handle object inputs (like {"url": "hitesh.ai"})
+              if (toolToCall === 'cloneWebsite') {
+                const url = toolInput.url || toolInput.websiteUrl || '';
+                const outputDir = toolInput.outputDir || toolInput.output || '';
+                const maxPages = parseInt(toolInput.maxPages || toolInput.pages) || 5;
+                responseFromTool = await TOOL_MAP[toolToCall](url, outputDir, maxPages);
+              } else {
+                // For other tools, try to extract the first string value
+                const firstValue = Object.values(toolInput)[0] || '';
+                responseFromTool = await TOOL_MAP[toolToCall](firstValue);
+              }
             } else {
-              responseFromTool = await TOOL_MAP[toolToCall](parsedInput);
+              // Try to parse as JSON array/object first
+              const parsedInput = JSON.parse(toolInput);
+              if (Array.isArray(parsedInput)) {
+                responseFromTool = await TOOL_MAP[toolToCall](...parsedInput);
+              } else if (typeof parsedInput === 'object') {
+                // Handle object inputs
+                if (toolToCall === 'cloneWebsite') {
+                  const url = parsedInput.url || parsedInput.websiteUrl || '';
+                  const outputDir = parsedInput.outputDir || parsedInput.output || '';
+                  const maxPages = parseInt(parsedInput.maxPages || parsedInput.pages) || 5;
+                  responseFromTool = await TOOL_MAP[toolToCall](url, outputDir, maxPages);
+                } else {
+                  responseFromTool = await TOOL_MAP[toolToCall](parsedInput);
+                }
+              } else {
+                responseFromTool = await TOOL_MAP[toolToCall](parsedInput);
+              }
             }
           } catch (jsonError) {
             // If not valid JSON, try comma-separated values for multi-argument functions
@@ -340,8 +482,17 @@ async function main(aiClient, modelName) {
                 parseInt(args[1]) || 8080 // port
               );
             } else {
-              // Single argument
-              responseFromTool = await TOOL_MAP[toolToCall](toolInput);
+              // Single argument - handle URL detection for cloneWebsite
+              if (toolToCall === 'cloneWebsite' && toolInput && !toolInput.includes(',')) {
+                // If it looks like a URL, add protocol if missing
+                let url = toolInput.trim();
+                if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                  url = 'https://' + url;
+                }
+                responseFromTool = await TOOL_MAP[toolToCall](url);
+              } else {
+                responseFromTool = await TOOL_MAP[toolToCall](toolInput);
+              }
             }
           }
           
