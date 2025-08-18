@@ -8,15 +8,17 @@ const showUsage = () => {
 Website Cloner CLI
 
 Usage:
-  node index.js <website-url> [max-pages]
+  node index.js <website-url> [output-path] [max-pages]
 
 Arguments:
   website-url    The URL of the website to clone (required)
+  output-path    Output directory path (optional, default: "./output")
   max-pages      Maximum number of pages to clone (optional, default: 5)
 
 Examples:
   node index.js https://www.example.com
-  node index.js https://www.example.com 10
+  node index.js https://www.example.com ./my-clone
+  node index.js https://www.example.com ./my-clone 10
 
 Options:
   --help, -h     Show this help message
@@ -34,7 +36,8 @@ const main = async () => {
     }
     
     const url = args[0];
-    const maxPages = parseInt(args[1]) || 5;
+    const outputPath = args[1] || "./output";
+    const maxPages = parseInt(args[2]) || 5;
     
     // Validate URL
     try {
@@ -46,11 +49,12 @@ const main = async () => {
     }
     
     console.log(`Cloning website: ${url}`);
+    console.log(`Output path: ${outputPath}`);
     console.log(`Maximum pages to clone: ${maxPages}`);
     console.log('Starting...\n');
     
     try {
-        await processWebsite(url, maxPages);
+        await processWebsite(url, maxPages, outputPath);
     } catch (error) {
         console.error('Error occurred during website cloning:', error.message);
         process.exit(1);

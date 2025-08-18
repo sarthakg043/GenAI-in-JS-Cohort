@@ -1575,12 +1575,19 @@ const extractLinks = async (url) => {
     }
 }
 
-const processWebsite = async (url, maxPages = 5) => {
+const processWebsite = async (url, maxPages = 5, outputPath= "./output") => {
     try {
         console.log(`Starting to clone website: ${url}`);
         
         const domain = new URL(url).hostname.replace(/^www\./, '');
-        const outputDir = `./cloned_${domain.replace(/\./g, '_')}`;
+        
+        // Ensure outputPath is a string and normalize it (remove trailing slash if present)
+        if (typeof outputPath !== 'string') {
+            throw new Error('outputPath must be a string');
+        }
+        const normalizedOutputPath = outputPath.replace(/\/$/, ''); // Remove trailing slash
+        // Use path.join for safe concatenation
+        const outputDir = path.join(normalizedOutputPath, `cloned_${domain.replace(/\./g, '_')}`);
         
         console.log(`Output directory: ${outputDir}`);
         
