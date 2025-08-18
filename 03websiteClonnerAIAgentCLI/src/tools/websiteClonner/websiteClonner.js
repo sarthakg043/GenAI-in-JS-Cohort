@@ -1,6 +1,7 @@
 import axios from 'axios';
 import {load as cheerio} from 'cheerio';
 import fs from 'fs';
+import path from 'path';
 import crypto from 'crypto';
 
 // Configure axios defaults
@@ -169,11 +170,425 @@ const downloadJS = async (url, dest) => {
         
         fs.writeFileSync(dest, response.data, 'utf8');
         console.log(`✓ JavaScript downloaded: ${dest}`);
-        return true;
+        return { success: true, content: response.data };
     } catch (error) {
         console.error(`✗ Error downloading JavaScript from ${url}:`, error.message);
+        return { success: false, content: null };
+    }
+};
+
+const downloadFont = async (url, dest) => {
+    try {
+        // Create directory if it doesn't exist
+        const dir = dest.substring(0, dest.lastIndexOf('/'));
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        
+        const response = await axios.get(url, { 
+            responseType: 'arraybuffer',
+            timeout: 10000,
+            headers: {
+                'Accept': 'font/woff2,font/woff,font/truetype,*/*;q=0.1',
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+            }
+        });
+        
+        fs.writeFileSync(dest, response.data);
+        console.log(`✓ Font downloaded: ${dest}`);
+        return true;
+    } catch (error) {
+        console.error(`✗ Error downloading font from ${url}:`, error.message);
         return false;
     }
+};
+
+// Function to discover files in a directory via HTTP
+const discoverDirectoryFiles = async (directoryUrl, maxDepth = 2, currentDepth = 0) => {
+    if (currentDepth >= maxDepth) return [];
+    
+    try {
+        console.log(`Discovering files in: ${directoryUrl}`);
+        const response = await axios.get(directoryUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+            timeout: 30000,
+            validateStatus: (status) => status < 500
+        });
+        
+        if (response.status !== 200) {
+            return [];
+        }
+        
+        const $ = cheerio.load(response.data);
+        const files = [];
+        
+        // Look for common directory listing patterns
+        const linkSelectors = [
+            'a[href]',           // Generic links
+            'pre a[href]',       // Apache-style
+            'table a[href]',     // Table-based listings
+            '.file a[href]',     // Custom file listings
+            '.directory a[href]' // Custom directory listings
+        ];
+        
+        for (const selector of linkSelectors) {
+            $(selector).each((_, element) => {
+                const href = $(element).attr('href');
+                if (href && !href.startsWith('?') && !href.startsWith('#') && 
+                    href !== '../' && href !== './' && !href.startsWith('mailto:')) {
+                    
+                    let fullUrl;
+                    if (href.startsWith('http')) {
+                        fullUrl = href;
+                    } else if (href.startsWith('/')) {
+                        const urlObj = new URL(directoryUrl);
+                        fullUrl = `${urlObj.protocol}//${urlObj.host}${href}`;
+                    } else {
+                        fullUrl = new URL(href, directoryUrl).href;
+                    }
+                    
+                    // Determine if it's a file or directory
+                    const isDirectory = href.endsWith('/') || (!href.includes('.') && !href.includes('?'));
+                    
+                    files.push({
+                        url: fullUrl,
+                        name: href,
+                        isDirectory
+                    });
+                }
+            });
+            
+            if (files.length > 0) break; // Found files with this selector
+        }
+        
+        return files;
+    } catch (error) {
+        console.log(`Could not discover directory ${directoryUrl}: ${error.message}`);
+        return [];
+    }
+};
+
+// Function to recursively download all files from Next.js static directories
+const downloadAllStaticFiles = async (baseUrl, outputDir) => {
+    const staticDirectories = [
+        '/_next/static/chunks/',
+        '/_next/static/css/',
+        '/_next/static/media/',
+        '/_next/static/js/'
+    ];
+    
+    const downloadedFiles = new Set();
+    
+    for (const staticDir of staticDirectories) {
+        const dirUrl = baseUrl + staticDir;
+        console.log(`\nExploring static directory: ${dirUrl}`);
+        
+        try {
+            const files = await discoverDirectoryFiles(dirUrl);
+            
+            for (const file of files) {
+                if (!file.isDirectory && !downloadedFiles.has(file.url)) {
+                    downloadedFiles.add(file.url);
+                    
+                    // Determine file type and target directory
+                    let targetDir, localPath;
+                    const fileName = file.name.split('?')[0]; // Remove query params
+                    
+                    if (staticDir.includes('/chunks/')) {
+                        targetDir = path.join(outputDir, '_next', 'static', 'chunks');
+                        localPath = `/_next/static/chunks/${fileName}`;
+                    } else if (staticDir.includes('/css/')) {
+                        targetDir = path.join(outputDir, '_next', 'static', 'css');
+                        localPath = `/_next/static/css/${fileName}`;
+                    } else if (staticDir.includes('/media/')) {
+                        targetDir = path.join(outputDir, '_next', 'static', 'media');
+                        localPath = `/_next/static/media/${fileName}`;
+                    } else if (staticDir.includes('/js/')) {
+                        targetDir = path.join(outputDir, '_next', 'static', 'js');
+                        localPath = `/_next/static/js/${fileName}`;
+                    } else {
+                        continue; // Skip unknown directories
+                    }
+                    
+                    // Ensure target directory exists
+                    if (!fs.existsSync(targetDir)) {
+                        fs.mkdirSync(targetDir, { recursive: true });
+                    }
+                    
+                    const fullPath = path.join(targetDir, fileName);
+                    
+                    // Download based on file type
+                    if (fileName.endsWith('.js')) {
+                        console.log(`Downloading JS: ${file.url} -> ${localPath}`);
+                        await downloadJS(file.url, fullPath);
+                    } else if (fileName.endsWith('.css')) {
+                        console.log(`Downloading CSS: ${file.url} -> ${localPath}`);
+                        await downloadCSS(file.url, fullPath);
+                    } else {
+                        console.log(`Downloading asset: ${file.url} -> ${localPath}`);
+                        await downloadFile(file.url, fullPath);
+                    }
+                }
+            }
+        } catch (error) {
+            console.warn(`Error exploring ${dirUrl}: ${error.message}`);
+        }
+    }
+    
+    return downloadedFiles.size;
+};
+
+// Function to download files from Next.js build manifest
+const downloadFromBuildManifest = async (baseUrl, outputDir) => {
+    const manifestPaths = [
+        '/_next/static/chunks/webpack-runtime.js',
+        '/_next/static/chunks/manifest.js',
+        '/_next/build-manifest.json',
+        '/_next/static/chunks/pages/_app.js',
+        '/_next/static/chunks/pages/_document.js'
+    ];
+    
+    const downloadedFiles = new Set();
+    let manifestData = null;
+    
+    // Try to fetch build manifest
+    for (const manifestPath of ['/_next/build-manifest.json', '/_next/static/manifest.json']) {
+        try {
+            const manifestUrl = baseUrl + manifestPath;
+            console.log(`Trying to fetch build manifest: ${manifestUrl}`);
+            
+            const response = await axios.get(manifestUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+                timeout: 30000,
+                validateStatus: (status) => status < 500
+            });
+            
+            if (response.status === 200) {
+                manifestData = response.data;
+                console.log('✓ Found build manifest');
+                break;
+            }
+        } catch (error) {
+            // Manifest not found, continue
+        }
+    }
+    
+    // Extract chunk URLs from manifest
+    const chunkUrls = new Set();
+    
+    if (manifestData) {
+        // Parse build manifest for chunk references
+        const addChunksFromObj = (obj, prefix = '') => {
+            if (typeof obj === 'string' && obj.includes('.js')) {
+                if (obj.startsWith('/')) {
+                    chunkUrls.add(baseUrl + obj);
+                } else {
+                    chunkUrls.add(baseUrl + '/_next/static/chunks/' + obj);
+                }
+            } else if (Array.isArray(obj)) {
+                obj.forEach(item => addChunksFromObj(item, prefix));
+            } else if (typeof obj === 'object' && obj !== null) {
+                Object.entries(obj).forEach(([key, value]) => {
+                    addChunksFromObj(value, prefix + key + '.');
+                });
+            }
+        };
+        
+        addChunksFromObj(manifestData);
+        console.log(`Found ${chunkUrls.size} chunks in build manifest`);
+    }
+    
+    // Also try common webpack runtime files
+    for (const manifestPath of manifestPaths) {
+        chunkUrls.add(baseUrl + manifestPath);
+    }
+    
+    // Download all discovered chunks
+    for (const chunkUrl of chunkUrls) {
+        try {
+            const fileName = chunkUrl.split('/').pop().split('?')[0];
+            if (!fileName.endsWith('.js') && !fileName.endsWith('.json')) continue;
+            
+            let targetDir;
+            if (chunkUrl.includes('/_next/static/chunks/')) {
+                targetDir = path.join(outputDir, '_next', 'static', 'chunks');
+            } else if (chunkUrl.includes('/_next/static/')) {
+                targetDir = path.join(outputDir, '_next', 'static');
+            } else {
+                targetDir = path.join(outputDir, '_next');
+            }
+            
+            if (!fs.existsSync(targetDir)) {
+                fs.mkdirSync(targetDir, { recursive: true });
+            }
+            
+            const fullPath = path.join(targetDir, fileName);
+            
+            // Skip if already downloaded
+            if (fs.existsSync(fullPath)) continue;
+            
+            console.log(`Downloading from manifest: ${chunkUrl}`);
+            
+            if (fileName.endsWith('.js')) {
+                const result = await downloadJS(chunkUrl, fullPath);
+                if (result.success) downloadedFiles.add(chunkUrl);
+            } else if (fileName.endsWith('.json')) {
+                await downloadFile(chunkUrl, fullPath);
+                downloadedFiles.add(chunkUrl);
+            }
+        } catch (error) {
+            console.warn(`Error downloading ${chunkUrl}:`, error.message);
+        }
+    }
+    
+    return downloadedFiles.size;
+};
+
+const extractChunkReferences = (jsContent, baseUrl, outputDir) => {
+    const chunkReferences = new Set();
+    
+    // Multiple regex patterns to catch different ways chunks are referenced
+    const patterns = [
+        // Pattern 1: Direct path references "/_next/static/chunks/..."
+        /["'](\/_next\/static\/chunks\/[^"'\s]+\.js)["']/g,
+        
+        // Pattern 2: Without quotes /_next/static/chunks/...
+        /\/_next\/static\/chunks\/[^\s"',;)}]+\.js/g,
+        
+        // Pattern 3: Webpack chunk ID references like {522:"app/page-abc.js"}
+        /[{,]\s*(\d+)\s*:\s*["']([^"']*\.js)["']/g,
+        
+        // Pattern 4: Import statements
+        /import\s*\(\s*["'](\/_next\/static\/chunks\/[^"']+\.js)["']\s*\)/g,
+        
+        // Pattern 5: Chunk names in arrays ["522.js", "app/page.js"]
+        /["'](\d+\.[a-f0-9]+\.js|app\/[^"']+\.js|pages\/[^"']+\.js)["']/g
+    ];
+    
+    console.log(`Scanning chunk content (${jsContent.length} characters) for references...`);
+    
+    for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.exec(jsContent)) !== null) {
+            let chunkPath;
+            
+            // Handle different capture groups
+            if (match[1] && match[1].startsWith('/_next/')) {
+                chunkPath = match[1]; // Direct path
+            } else if (match[2] && match[2].endsWith('.js')) {
+                // Webpack chunk ID reference - construct full path
+                chunkPath = `/_next/static/chunks/${match[2]}`;
+            } else if (match[1] && match[1].endsWith('.js')) {
+                // Chunk name - construct full path
+                chunkPath = `/_next/static/chunks/${match[1]}`;
+            } else {
+                continue;
+            }
+            
+            const fullUrl = baseUrl + chunkPath;
+            
+            // Check if this file exists locally
+            const localPath = path.join(outputDir, chunkPath.substring(1)); // Remove leading /
+            
+            console.log(`Checking chunk: ${chunkPath} -> ${fs.existsSync(localPath) ? 'EXISTS' : 'MISSING'}`);
+            
+            if (!fs.existsSync(localPath)) {
+                console.log(`Found missing chunk: ${chunkPath}`);
+                chunkReferences.add(fullUrl);
+            }
+        }
+        
+        // Reset regex lastIndex for next iteration
+        pattern.lastIndex = 0;
+    }
+    
+    console.log(`Found ${chunkReferences.size} missing chunk references`);
+    return Array.from(chunkReferences);
+};
+
+const downloadReferencedChunks = async (downloadedChunks, baseUrl, outputDir) => {
+    const allDownloadedChunks = new Set();
+    const chunksToProcess = [...downloadedChunks];
+    const downloadPromises = [];
+    
+    // Track already downloaded chunks to avoid duplicates
+    downloadedChunks.forEach(chunk => allDownloadedChunks.add(chunk.url));
+    
+    while (chunksToProcess.length > 0) {
+        const currentChunk = chunksToProcess.shift();
+        
+        if (!currentChunk.success || !currentChunk.content) {
+            continue;
+        }
+        
+        console.log(`Scanning chunk for references: ${currentChunk.filename}`);
+        
+        // Extract chunk references from the current chunk
+        const referencedChunks = extractChunkReferences(currentChunk.content, baseUrl, outputDir);
+        
+        for (const chunkUrl of referencedChunks) {
+            // Skip if already downloaded or being processed
+            if (allDownloadedChunks.has(chunkUrl)) {
+                continue;
+            }
+            
+            allDownloadedChunks.add(chunkUrl);
+            
+            console.log(`Found referenced chunk: ${chunkUrl}`);
+            
+            try {
+                // Extract the full path from the URL (preserving nested directories)
+                const urlObj = new URL(chunkUrl);
+                const chunkPath = urlObj.pathname; // e.g., "/_next/static/chunks/app/page-abc123.js"
+                
+                // Create local path preserving the directory structure
+                const localPath = path.join(outputDir, chunkPath.substring(1)); // Remove leading /
+                
+                // Ensure the directory exists
+                const dir = path.dirname(localPath);
+                if (!fs.existsSync(dir)) {
+                    fs.mkdirSync(dir, { recursive: true });
+                    console.log(`Created directory: ${dir}`);
+                }
+                
+                // Download the referenced chunk
+                const downloadPromise = downloadJS(chunkUrl, localPath).then(result => {
+                    if (result.success && result.content) {
+                        const newChunk = {
+                            url: chunkUrl,
+                            filename: path.basename(localPath),
+                            content: result.content,
+                            success: true
+                        };
+                        
+                        // Add to processing queue for recursive scanning
+                        chunksToProcess.push(newChunk);
+                        
+                        console.log(`✓ Downloaded referenced chunk: ${chunkPath}`);
+                        return newChunk;
+                    } else {
+                        console.warn(`✗ Failed to download: ${chunkPath}`);
+                        return { url: chunkUrl, success: false };
+                    }
+                });
+                
+                downloadPromises.push(downloadPromise);
+                
+            } catch (error) {
+                console.log(`Warning: Could not process referenced chunk ${chunkUrl}:`, error.message);
+            }
+        }
+    }
+    
+    // Wait for all referenced chunks to download
+    if (downloadPromises.length > 0) {
+        console.log(`Downloading ${downloadPromises.length} referenced chunks...`);
+        const results = await Promise.allSettled(downloadPromises);
+        const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+        console.log(`✓ Downloaded ${successful}/${downloadPromises.length} referenced chunks successfully`);
+    }
+    
+    return downloadPromises.length;
 };
 
 const getFileExtension = (url, contentType = '') => {
@@ -295,6 +710,16 @@ const savePage = async (url, offlineMapping, outputDir, pagesToProcess) => {
         const imagesDir = `${outputDir}/images`;
         const cssDir = `${outputDir}/css`;
         const jsDir = `${outputDir}/js`;
+        const fontsDir = `${outputDir}/fonts`;
+        
+        // Create Next.js specific directories
+        const nextDir = `${outputDir}/_next`;
+        const nextImageDir = `${outputDir}/_next/image`;
+        const nextStaticDir = `${outputDir}/_next/static`;
+        const nextStaticCssDir = `${outputDir}/_next/static/css`;
+        const nextStaticChunksDir = `${outputDir}/_next/static/chunks`;
+        const nextStaticMediaDir = `${outputDir}/_next/static/media`;
+        
         if (!fs.existsSync(imagesDir)) {
             fs.mkdirSync(imagesDir, { recursive: true });
         }
@@ -303,6 +728,27 @@ const savePage = async (url, offlineMapping, outputDir, pagesToProcess) => {
         }
         if (!fs.existsSync(jsDir)) {
             fs.mkdirSync(jsDir, { recursive: true });
+        }
+        if (!fs.existsSync(fontsDir)) {
+            fs.mkdirSync(fontsDir, { recursive: true });
+        }
+        if (!fs.existsSync(nextDir)) {
+            fs.mkdirSync(nextDir, { recursive: true });
+        }
+        if (!fs.existsSync(nextImageDir)) {
+            fs.mkdirSync(nextImageDir, { recursive: true });
+        }
+        if (!fs.existsSync(nextStaticDir)) {
+            fs.mkdirSync(nextStaticDir, { recursive: true });
+        }
+        if (!fs.existsSync(nextStaticCssDir)) {
+            fs.mkdirSync(nextStaticCssDir, { recursive: true });
+        }
+        if (!fs.existsSync(nextStaticChunksDir)) {
+            fs.mkdirSync(nextStaticChunksDir, { recursive: true });
+        }
+        if (!fs.existsSync(nextStaticMediaDir)) {
+            fs.mkdirSync(nextStaticMediaDir, { recursive: true });
         }
 
         // Replace links with local paths
@@ -330,18 +776,33 @@ const savePage = async (url, offlineMapping, outputDir, pagesToProcess) => {
                     cssUrl = new URL(href, url).href;
                 }
                 
-                // Generate unique filename for CSS
-                const cssName = cssUrl.split('/').pop().split('?')[0] || 'style.css';
-                const safeCssName = cssName.replace(/[^a-zA-Z0-9.-]/g, '_');
-                const uniqueCssName = generateUniqueFilename(
-                    safeCssName.replace('.css', ''), 
-                    'css', 
-                    cssDir,
-                    cssUrl
-                );
+                // Determine target directory based on the original path
+                let targetDir, localCssPath;
+                if (href.includes('/_next/static/css/')) {
+                    // Place Next.js CSS in _next/static/css/
+                    targetDir = nextStaticCssDir;
+                    const cssName = cssUrl.split('/').pop().split('?')[0] || 'style.css';
+                    
+                    // Keep original filename without modification
+                    localCssPath = `/_next/static/css/${cssName}`;
+                } else {
+                    // Place regular CSS in css/
+                    targetDir = cssDir;
+                    const cssName = cssUrl.split('/').pop().split('?')[0] || 'style.css';
+                    const safeCssName = cssName.replace(/[^a-zA-Z0-9.-]/g, '_');
+                    const uniqueCssName = generateUniqueFilename(
+                        safeCssName.replace('.css', ''), 
+                        'css', 
+                        targetDir,
+                        cssUrl
+                    );
+                    localCssPath = `./css/${uniqueCssName}`;
+                }
                 
-                const localCssPath = `./css/${uniqueCssName}`;
-                const fullCssPath = `${cssDir}/${uniqueCssName}`;
+                const fileName = localCssPath.split('/').pop();
+                const fullCssPath = localCssPath.startsWith('/_next/') ? 
+                    `${outputDir}${localCssPath}` : 
+                    `${targetDir}/${fileName}`;
                 
                 $(link).attr('href', localCssPath);
                 
@@ -349,7 +810,7 @@ const savePage = async (url, offlineMapping, outputDir, pagesToProcess) => {
                 cssFiles.push({
                     url: cssUrl,
                     path: fullCssPath,
-                    uniqueName: uniqueCssName
+                    uniqueName: fileName
                 });
                 
                 // Add download promise
@@ -359,6 +820,7 @@ const savePage = async (url, offlineMapping, outputDir, pagesToProcess) => {
 
         // Download and replace JavaScript files
         const jsPromises = [];
+        const downloadedChunks = []; // Track downloaded chunks for reference scanning
         $('script[src]').each((_, script) => {
             const src = $(script).attr('src');
             if (src && !src.startsWith('data:')) {
@@ -371,23 +833,287 @@ const savePage = async (url, offlineMapping, outputDir, pagesToProcess) => {
                     jsUrl = new URL(src, url).href;
                 }
                 
-                // Generate unique filename for JavaScript
-                const jsName = jsUrl.split('/').pop().split('?')[0] || 'script.js';
-                const safeJsName = sanitizeFilename(jsName.replace('.js', ''), 'script');
-                const uniqueJsName = generateUniqueFilename(
-                    safeJsName, 
-                    'js', 
-                    jsDir,
-                    jsUrl
-                );
+                // Determine target directory based on the original path
+                let targetDir, localJsPath;
+                if (src.includes('/_next/static/chunks/')) {
+                    // Preserve the full chunk path structure
+                    const chunkPath = src.split('/_next/static/chunks/')[1] || '';
+                    const pathSegments = chunkPath.split('/').filter(segment => segment);
+                    
+                    if (pathSegments.length > 1) {
+                        // Handle nested directories like /app/page.js
+                        const subDir = pathSegments.slice(0, -1).join('/');
+                        const fullSubDir = `${nextStaticChunksDir}/${subDir}`;
+                        if (!fs.existsSync(fullSubDir)) {
+                            fs.mkdirSync(fullSubDir, { recursive: true });
+                        }
+                        targetDir = fullSubDir;
+                        localJsPath = `/_next/static/chunks/${chunkPath}`;
+                    } else {
+                        // Single file in chunks root
+                        targetDir = nextStaticChunksDir;
+                        localJsPath = `/_next/static/chunks/${chunkPath}`;
+                    }
+                } else if (src.includes('/_next/static/')) {
+                    // Handle other _next/static paths (preserve structure)
+                    const staticPath = src.split('/_next/static/')[1] || '';
+                    const pathSegments = staticPath.split('/').filter(segment => segment);
+                    
+                    if (pathSegments.length > 1) {
+                        const subDir = pathSegments.slice(0, -1).join('/');
+                        const fullSubDir = `${nextStaticDir}/${subDir}`;
+                        if (!fs.existsSync(fullSubDir)) {
+                            fs.mkdirSync(fullSubDir, { recursive: true });
+                        }
+                        targetDir = fullSubDir;
+                        
+                        const jsName = jsUrl.split('/').pop().split('?')[0] || 'script.js';
+                        
+                        // Keep original filename without modification for _next/static paths
+                        localJsPath = `/_next/static/${subDir}/${jsName}`;
+                    } else {
+                        targetDir = nextStaticDir;
+                        const jsName = jsUrl.split('/').pop().split('?')[0] || 'script.js';
+                        
+                        // Keep original filename without modification
+                        localJsPath = `/_next/static/${jsName}`;
+                    }
+                } else {
+                    // Place regular JavaScript in js/
+                    targetDir = jsDir;
+                    const jsName = jsUrl.split('/').pop().split('?')[0] || 'script.js';
+                    const safeJsName = sanitizeFilename(jsName.replace('.js', ''), 'script');
+                    const uniqueJsName = generateUniqueFilename(
+                        safeJsName, 
+                        'js', 
+                        targetDir,
+                        jsUrl
+                    );
+                    localJsPath = `./js/${uniqueJsName}`;
+                }
                 
-                const localJsPath = `./js/${uniqueJsName}`;
+                const fileName = localJsPath.split('/').pop();
+                const fullJsPath = localJsPath.startsWith('/_next/') ? 
+                    `${outputDir}${localJsPath}` : 
+                    `${targetDir}/${fileName}`;
+                
                 $(script).attr('src', localJsPath);
                 
                 console.log(`Found JavaScript: ${jsUrl} -> ${localJsPath}`);
                 
+                // Add download promise and track chunks
+                const downloadPromise = downloadJS(jsUrl, fullJsPath).then(result => {
+                    // Track downloaded chunks for reference scanning
+                    if (result.success && (src.includes('/_next/static/chunks/') || src.includes('/_next/static/'))) {
+                        downloadedChunks.push({
+                            url: jsUrl,
+                            filename: fileName,
+                            content: result.content,
+                            success: true
+                        });
+                    }
+                    return result;
+                });
+                jsPromises.push(downloadPromise);
+            }
+        });
+
+        // Download and replace preload fonts
+        const fontPromises = [];
+        $('link[rel="preload"][as="font"]').each((_, link) => {
+            const href = $(link).attr('href');
+            if (href && !href.startsWith('data:')) {
+                let fontUrl = href;
+                
+                // Convert relative URLs to absolute
+                if (href.startsWith('/')) {
+                    fontUrl = baseUrl + href;
+                } else if (!href.startsWith('http')) {
+                    fontUrl = new URL(href, url).href;
+                }
+                
+                console.log(`Found preload font: ${fontUrl}`);
+                
+                // Determine target directory based on the original path
+                let targetDir, localFontPath;
+                if (href.includes('/_next/static/media/')) {
+                    // Place Next.js fonts in _next/static/media/
+                    targetDir = nextStaticMediaDir;
+                    const fontName = fontUrl.split('/').pop().split('?')[0] || 'font.woff2';
+                    
+                    // Keep original filename without modification
+                    localFontPath = `/_next/static/media/${fontName}`;
+                } else {
+                    // Place regular fonts in fonts/
+                    targetDir = fontsDir;
+                    const fontName = fontUrl.split('/').pop().split('?')[0] || 'font.woff2';
+                    const safeFontName = sanitizeFilename(fontName.replace(/\.(woff2?|ttf|otf|eot)$/i, ''), 'font');
+                    
+                    const extensionMatch = fontName.match(/\.(woff2?|ttf|otf|eot)$/i);
+                    const extension = extensionMatch ? extensionMatch[1].toLowerCase() : 'woff2';
+                    
+                    const uniqueFontName = generateUniqueFilename(
+                        safeFontName, 
+                        extension, 
+                        targetDir,
+                        fontUrl
+                    );
+                    localFontPath = `./fonts/${uniqueFontName}`;
+                }
+                
+                const fileName = localFontPath.split('/').pop();
+                const fullFontPath = localFontPath.startsWith('/_next/') ? 
+                    `${outputDir}${localFontPath}` : 
+                    `${targetDir}/${fileName}`;
+                
+                $(link).attr('href', localFontPath);
+                
+                console.log(`Will download font as: ${localFontPath}`);
+                
                 // Add download promise
-                jsPromises.push(downloadJS(jsUrl, `${jsDir}/${uniqueJsName}`));
+                fontPromises.push(downloadFont(fontUrl, fullFontPath));
+            }
+        });
+
+        // Download and replace preload scripts
+        const preloadJsPromises = [];
+        $('link[rel="preload"][as="script"]').each((_, link) => {
+            const href = $(link).attr('href');
+            if (href && !href.startsWith('data:')) {
+                let scriptUrl = href;
+                
+                // Convert relative URLs to absolute
+                if (href.startsWith('/')) {
+                    scriptUrl = baseUrl + href;
+                } else if (!href.startsWith('http')) {
+                    scriptUrl = new URL(href, url).href;
+                }
+                
+                console.log(`Found preload script: ${scriptUrl}`);
+                
+                // Determine target directory based on the original path
+                let targetDir, localScriptPath;
+                if (href.includes('/_next/static/chunks/')) {
+                    // Preserve the full chunk path structure for preload scripts
+                    const chunkPath = href.split('/_next/static/chunks/')[1] || '';
+                    const pathSegments = chunkPath.split('/').filter(segment => segment);
+                    
+                    if (pathSegments.length > 1) {
+                        // Handle nested directories like /app/page.js
+                        const subDir = pathSegments.slice(0, -1).join('/');
+                        const fullSubDir = `${nextStaticChunksDir}/${subDir}`;
+                        if (!fs.existsSync(fullSubDir)) {
+                            fs.mkdirSync(fullSubDir, { recursive: true });
+                        }
+                        targetDir = fullSubDir;
+                        localScriptPath = `/_next/static/chunks/${chunkPath}`;
+                    } else {
+                        // Single file in chunks root
+                        targetDir = nextStaticChunksDir;
+                        localScriptPath = `/_next/static/chunks/${chunkPath}`;
+                    }
+                } else if (href.includes('/_next/static/')) {
+                    // Handle other _next/static preload paths
+                    const staticPath = href.split('/_next/static/')[1] || '';
+                    const pathSegments = staticPath.split('/').filter(segment => segment);
+                    
+                    if (pathSegments.length > 1) {
+                        const subDir = pathSegments.slice(0, -1).join('/');
+                        const fullSubDir = `${nextStaticDir}/${subDir}`;
+                        if (!fs.existsSync(fullSubDir)) {
+                            fs.mkdirSync(fullSubDir, { recursive: true });
+                        }
+                        targetDir = fullSubDir;
+                        
+                        const scriptName = scriptUrl.split('/').pop().split('?')[0] || 'preload-script.js';
+                        
+                        // Keep original filename without modification
+                        localScriptPath = `/_next/static/${subDir}/${scriptName}`;
+                    } else {
+                        targetDir = nextStaticDir;
+                        const scriptName = scriptUrl.split('/').pop().split('?')[0] || 'preload-script.js';
+                        
+                        // Keep original filename without modification
+                        localScriptPath = `/_next/static/${scriptName}`;
+                    }
+                } else {
+                    // Place regular preload scripts in js/
+                    targetDir = jsDir;
+                    const scriptName = scriptUrl.split('/').pop().split('?')[0] || 'preload-script.js';
+                    const safeScriptName = sanitizeFilename(scriptName.replace('.js', ''), 'preload-script');
+                    const uniqueScriptName = generateUniqueFilename(
+                        safeScriptName, 
+                        'js', 
+                        targetDir,
+                        scriptUrl
+                    );
+                    localScriptPath = `./js/${uniqueScriptName}`;
+                }
+                
+                const fileName = localScriptPath.split('/').pop();
+                const fullScriptPath = localScriptPath.startsWith('/_next/') ? 
+                    `${outputDir}${localScriptPath}` : 
+                    `${targetDir}/${fileName}`;
+                
+                $(link).attr('href', localScriptPath);
+                
+                console.log(`Will download preload script as: ${localScriptPath}`);
+                
+                // Add download promise
+                preloadJsPromises.push(downloadJS(scriptUrl, fullScriptPath));
+            }
+        });
+
+        // Download and replace preload stylesheets
+        const preloadCssPromises = [];
+        $('link[rel="preload"][as="style"]').each((_, link) => {
+            const href = $(link).attr('href');
+            if (href && !href.startsWith('data:')) {
+                let cssUrl = href;
+                
+                // Convert relative URLs to absolute
+                if (href.startsWith('/')) {
+                    cssUrl = baseUrl + href;
+                } else if (!href.startsWith('http')) {
+                    cssUrl = new URL(href, url).href;
+                }
+                
+                console.log(`Found preload stylesheet: ${cssUrl}`);
+                
+                // Determine target directory based on the original path
+                let targetDir, localCssPath;
+                if (href.includes('/_next/static/css/')) {
+                    // Place Next.js preload CSS in _next/static/css/
+                    targetDir = nextStaticCssDir;
+                    const cssName = cssUrl.split('/').pop().split('?')[0] || 'preload-style.css';
+                    
+                    // Keep original filename without modification
+                    localCssPath = `/_next/static/css/${cssName}`;
+                } else {
+                    // Place regular preload CSS in css/
+                    targetDir = cssDir;
+                    const cssName = cssUrl.split('/').pop().split('?')[0] || 'preload-style.css';
+                    const safeCssName = sanitizeFilename(cssName.replace('.css', ''), 'preload-style');
+                    const uniqueCssName = generateUniqueFilename(
+                        safeCssName, 
+                        'css', 
+                        targetDir,
+                        cssUrl
+                    );
+                    localCssPath = `./css/${uniqueCssName}`;
+                }
+                
+                const fileName = localCssPath.split('/').pop();
+                const fullCssPath = localCssPath.startsWith('/_next/') ? 
+                    `${outputDir}${localCssPath}` : 
+                    `${targetDir}/${fileName}`;
+                
+                $(link).attr('href', localCssPath);
+                
+                console.log(`Will download preload stylesheet as: ${localCssPath}`);
+                
+                // Add download promise
+                preloadCssPromises.push(downloadCSS(cssUrl, fullCssPath));
             }
         });
 
@@ -431,31 +1157,115 @@ const savePage = async (url, offlineMapping, outputDir, pagesToProcess) => {
                 
                 console.log(`Found image: ${imgUrl}`);
                 
-                // Generate proper filename with extension
-                const urlPath = imgUrl.split('?')[0]; // Remove query params
-                let imgName = urlPath.split('/').pop() || 'image';
+                // Determine target directory based on the original path
+                let targetDir, localPath;
+                if (imgSrc.includes('/_next/image?url=') || imgSrc.includes('_next/image?url=')) {
+                    // Handle Next.js Image Optimization API URLs like /_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fimage.jpg
+                    try {
+                        const urlObj = new URL(imgSrc, baseUrl);
+                        const encodedImageUrl = urlObj.searchParams.get('url');
+                        
+                        if (encodedImageUrl) {
+                            const decodedImageUrl = decodeURIComponent(encodedImageUrl);
+                            console.log(`Decoded Next.js image URL: ${decodedImageUrl}`);
+                            
+                            // Determine if the decoded URL is a _next/static path or other
+                            if (decodedImageUrl.includes('/_next/static/')) {
+                                targetDir = `${outputDir}/_next/static`;
+                                
+                                const staticPath = decodedImageUrl.split('/_next/static/')[1] || '';
+                                const pathSegments = staticPath.split('/').filter(segment => segment);
+                                
+                                if (pathSegments.length > 1) {
+                                    const subDir = pathSegments.slice(0, -1).join('/');
+                                    const fullSubDir = `${targetDir}/${subDir}`;
+                                    if (!fs.existsSync(fullSubDir)) {
+                                        fs.mkdirSync(fullSubDir, { recursive: true });
+                                    }
+                                }
+                                
+                                const originalFileName = pathSegments[pathSegments.length - 1] || 'image';
+                                const cleanFileName = originalFileName.split('?')[0];
+                                const extension = getFileExtension(imgUrl);
+                                const baseName = cleanFileName.replace(/\.[^.]*$/, '') || 'nextimg';
+                                const uniqueImgName = generateUniqueFilename(baseName, extension, targetDir, imgUrl);
+                                
+                                const subPath = pathSegments.length > 1 ? pathSegments.slice(0, -1).join('/') + '/' : '';
+                                localPath = `/_next/static/${subPath}${uniqueImgName}`;
+                            } else {
+                                targetDir = imagesDir;
+                                const cleanUrl = decodedImageUrl.split('?')[0];
+                                let imgName = cleanUrl.split('/').pop() || 'decoded_image';
+                                imgName = imgName.replace(/[^a-zA-Z0-9.-]/g, '_');
+                                const extension = getFileExtension(imgUrl);
+                                const baseName = imgName.replace(/\.[^.]*$/, '') || 'decoded_image';
+                                const uniqueImgName = generateUniqueFilename(baseName, extension, targetDir, imgUrl);
+                                localPath = `./images/${uniqueImgName}`;
+                            }
+                        } else {
+                            // Fallback if no url parameter found
+                            targetDir = imagesDir;
+                            const extension = getFileExtension(imgUrl);
+                            const uniqueImgName = generateUniqueFilename('nextimage_api', extension, targetDir, imgUrl);
+                            localPath = `./images/${uniqueImgName}`;
+                        }
+                    } catch (error) {
+                        console.log(`Warning: Could not parse Next.js image URL ${imgSrc}, treating as regular image`);
+                        targetDir = imagesDir;
+                        const extension = getFileExtension(imgUrl);
+                        const uniqueImgName = generateUniqueFilename('nextimage_parse_error', extension, targetDir, imgUrl);
+                        localPath = `./images/${uniqueImgName}`;
+                    }
+                } else if (imgSrc.includes('/_next/image/') || imgSrc.includes('/_next/')) {
+                    // Handle Next.js images - place directly in _next/
+                    targetDir = nextDir;
+                    
+                    // Generate filename for Next.js image
+                    const urlPath = imgUrl.split('?')[0]; // Remove query params
+                    let imgName = urlPath.split('/').pop() || 'nextimage';
+                    imgName = imgName.replace(/[^a-zA-Z0-9.-]/g, '_');
+                    const extension = getFileExtension(imgUrl);
+                    const baseName = imgName.replace(/\.[^.]*$/, '') || 'nextimage';
+                    const uniqueImgName = generateUniqueFilename(baseName, extension, targetDir, imgUrl);
+                    
+                    localPath = `/_next/${uniqueImgName}`;
+                } else {
+                    // Handle regular images - use the images directory
+                    targetDir = imagesDir;
+                    
+                    // Generate proper filename with extension
+                    const urlPath = imgUrl.split('?')[0]; // Remove query params
+                    let imgName = urlPath.split('/').pop() || 'image';
+                    
+                    // Clean the filename and ensure it has an extension
+                    imgName = imgName.replace(/[^a-zA-Z0-9.-]/g, '_');
+                    const extension = getFileExtension(imgUrl);
+                    
+                    // Remove existing extension if present and add the correct one
+                    const baseName = imgName.replace(/\.[^.]*$/, '') || 'image';
+                    const uniqueImgName = generateUniqueFilename(baseName, extension, targetDir, imgUrl);
+                    
+                    localPath = `./images/${uniqueImgName}`;
+                }
                 
-                // Clean the filename and ensure it has an extension
-                imgName = imgName.replace(/[^a-zA-Z0-9.-]/g, '_');
-                const extension = getFileExtension(imgUrl);
+                const fileName = localPath.split('/').pop();
+                const fullPath = localPath.startsWith('/_next/') ? 
+                    `${outputDir}${localPath}` : 
+                    `${targetDir}/${fileName}`;
                 
-                // Remove existing extension if present and add the correct one
-                const baseName = imgName.replace(/\.[^.]*$/, '') || 'image';
-                const uniqueImgName = generateUniqueFilename(baseName, extension, imagesDir, imgUrl);
-                
-                const localPath = `./images/${uniqueImgName}`;
-                
-                console.log(`Will download as: ${uniqueImgName}`);
+                console.log(`Will download as: ${localPath}`);
                 
                 // Store the mapping for later HTML update
                 imageReplacements.set(imgSrc, localPath);
                 
                 // Add download promise
-                const downloadPromise = downloadImage(imgUrl, `${imagesDir}/${uniqueImgName}`)
+                const downloadPromise = downloadImage(imgUrl, fullPath)
                     .then(actualPath => {
-                        if (actualPath && actualPath !== `${imagesDir}/${uniqueImgName}`) {
+                        if (actualPath && actualPath !== fullPath) {
                             // Extension was corrected, update the mapping
-                            const correctedLocalPath = actualPath.replace(imagesDir, './images');
+                            const correctedLocalPath = localPath.startsWith('/_next/') ?
+                                actualPath.replace(outputDir, '') :
+                                actualPath.replace(imagesDir, './images');
                             imageReplacements.set(imgSrc, correctedLocalPath);
                         }
                         return actualPath;
@@ -479,30 +1289,133 @@ const savePage = async (url, offlineMapping, outputDir, pagesToProcess) => {
                         bgUrl = new URL(bgUrl, url).href;
                     }
                     
-                    const urlPath = bgUrl.split('?')[0];
-                    let imgName = urlPath.split('/').pop() || 'bg_image';
-                    imgName = imgName.replace(/[^a-zA-Z0-9.-]/g, '_');
-                    const extension = getFileExtension(bgUrl);
-                    const baseName = imgName.replace(/\.[^.]*$/, '') || 'bg_image';
-                    const uniqueImgName = generateUniqueFilename(baseName, extension, imagesDir, bgUrl);
+                    // Determine target directory and path for background image
+                    let targetDir, localPath;
+                    if (bgImageMatch[1].includes('/_next/image?url=') || bgImageMatch[1].includes('_next/image?url=')) {
+                        // Handle Next.js Image Optimization API URLs in background
+                        try {
+                            const urlObj = new URL(bgImageMatch[1], baseUrl);
+                            const encodedImageUrl = urlObj.searchParams.get('url');
+                            
+                            if (encodedImageUrl) {
+                                const decodedImageUrl = decodeURIComponent(encodedImageUrl);
+                                console.log(`Decoded Next.js background image URL: ${decodedImageUrl}`);
+                                
+                                if (decodedImageUrl.includes('/_next/static/')) {
+                                    targetDir = `${outputDir}/_next/static`;
+                                    
+                                    const staticPath = decodedImageUrl.split('/_next/static/')[1] || '';
+                                    const pathSegments = staticPath.split('/').filter(segment => segment);
+                                    
+                                    if (pathSegments.length > 1) {
+                                        const subDir = pathSegments.slice(0, -1).join('/');
+                                        const fullSubDir = `${targetDir}/${subDir}`;
+                                        if (!fs.existsSync(fullSubDir)) {
+                                            fs.mkdirSync(fullSubDir, { recursive: true });
+                                        }
+                                    }
+                                    
+                                    const originalFileName = pathSegments[pathSegments.length - 1] || 'bg_image';
+                                    const cleanFileName = originalFileName.split('?')[0];
+                                    const extension = getFileExtension(bgUrl);
+                                    const baseName = cleanFileName.replace(/\.[^.]*$/, '') || 'nextbg';
+                                    const uniqueImgName = generateUniqueFilename(baseName, extension, targetDir, bgUrl);
+                                    
+                                    const subPath = pathSegments.length > 1 ? pathSegments.slice(0, -1).join('/') + '/' : '';
+                                    localPath = `/_next/static/${subPath}${uniqueImgName}`;
+                                } else {
+                                    targetDir = imagesDir;
+                                    const cleanUrl = decodedImageUrl.split('?')[0];
+                                    let imgName = cleanUrl.split('/').pop() || 'decoded_bg';
+                                    imgName = imgName.replace(/[^a-zA-Z0-9.-]/g, '_');
+                                    const extension = getFileExtension(bgUrl);
+                                    const baseName = imgName.replace(/\.[^.]*$/, '') || 'decoded_bg';
+                                    const uniqueImgName = generateUniqueFilename(baseName, extension, targetDir, bgUrl);
+                                    localPath = `./images/${uniqueImgName}`;
+                                }
+                            } else {
+                                targetDir = imagesDir;
+                                const extension = getFileExtension(bgUrl);
+                                const uniqueImgName = generateUniqueFilename('nextbg_api', extension, targetDir, bgUrl);
+                                localPath = `./images/${uniqueImgName}`;
+                            }
+                        } catch (error) {
+                            console.log(`Warning: Could not parse Next.js background image URL, treating as regular image`);
+                            targetDir = imagesDir;
+                            const extension = getFileExtension(bgUrl);
+                            const uniqueImgName = generateUniqueFilename('nextbg_parse_error', extension, targetDir, bgUrl);
+                            localPath = `./images/${uniqueImgName}`;
+                        }
+                    } else if (bgImageMatch[1].includes('/_next/image/')) {
+                        // Handle Next.js optimized background images
+                        targetDir = nextImageDir;
+                        
+                        const nextImagePath = bgImageMatch[1].split('/_next/image/')[1] || '';
+                        const pathSegments = nextImagePath.split('/').filter(segment => segment);
+                        
+                        if (pathSegments.length > 1) {
+                            const subDir = pathSegments.slice(0, -1).join('/');
+                            const fullSubDir = `${nextImageDir}/${subDir}`;
+                            if (!fs.existsSync(fullSubDir)) {
+                                fs.mkdirSync(fullSubDir, { recursive: true });
+                            }
+                        }
+                        
+                        const originalFileName = pathSegments[pathSegments.length - 1] || 'bg_image';
+                        const cleanFileName = originalFileName.split('?')[0];
+                        const extension = getFileExtension(bgUrl);
+                        const baseName = cleanFileName.replace(/\.[^.]*$/, '') || 'nextbg';
+                        const uniqueImgName = generateUniqueFilename(baseName, extension, targetDir, bgUrl);
+                        
+                        const subPath = pathSegments.length > 1 ? pathSegments.slice(0, -1).join('/') + '/' : '';
+                        localPath = `/_next/image/${subPath}${uniqueImgName}`;
+                    } else {
+                        // Handle regular background images
+                        targetDir = imagesDir;
+                        
+                        const urlPath = bgUrl.split('?')[0];
+                        let imgName = urlPath.split('/').pop() || 'bg_image';
+                        imgName = imgName.replace(/[^a-zA-Z0-9.-]/g, '_');
+                        const extension = getFileExtension(bgUrl);
+                        const baseName = imgName.replace(/\.[^.]*$/, '') || 'bg_image';
+                        const uniqueImgName = generateUniqueFilename(baseName, extension, targetDir, bgUrl);
+                        
+                        localPath = `./images/${uniqueImgName}`;
+                    }
                     
-                    const localPath = `./images/${uniqueImgName}`;
+                    const fullPath = localPath.startsWith('/_next/') ? 
+                        `${outputDir}${localPath}` : 
+                        `${targetDir}/${localPath.split('/').pop()}`;
+                    
                     const newStyle = style.replace(bgImageMatch[0], `background-image: url('${localPath}')`);
                     $(element).attr('style', newStyle);
                     
-                    imagePromises.push(downloadImage(bgUrl, `${imagesDir}/${uniqueImgName}`));
+                    imagePromises.push(downloadImage(bgUrl, fullPath));
                 }
             }
         });
 
         // Wait for all downloads to complete
-        const allPromises = [...imagePromises, ...cssPromises, ...jsPromises];
+        const allPromises = [...imagePromises, ...cssPromises, ...jsPromises, ...fontPromises, ...preloadJsPromises, ...preloadCssPromises];
         if (allPromises.length > 0) {
-            console.log(`Downloading ${imagePromises.length} images, ${cssPromises.length} CSS files, and ${jsPromises.length} JavaScript files...`);
+            console.log(`Downloading ${imagePromises.length} images, ${cssPromises.length} CSS files, ${jsPromises.length} JavaScript files, ${fontPromises.length} fonts, ${preloadJsPromises.length} preload scripts, and ${preloadCssPromises.length} preload stylesheets...`);
             const results = await Promise.allSettled(allPromises);
             const successful = results.filter(r => r.status === 'fulfilled').length;
             console.log(`✓ Downloaded ${successful}/${allPromises.length} assets successfully`);
         }
+        
+        // Scan downloaded chunks for additional chunk references
+        if (downloadedChunks.length > 0) {
+            console.log(`Scanning ${downloadedChunks.length} chunks for additional references...`);
+            try {
+                await downloadReferencedChunks(downloadedChunks, baseUrl, outputDir);
+            } catch (error) {
+                console.warn('Error during chunk reference scanning:', error.message);
+            }
+        }
+        
+        // Simple chunk-based discovery is handled above in chunk scanning
+        // Complex directory and manifest discovery methods are available if needed
         
         // Process CSS files for background images
         let totalBackgroundImages = 0;
