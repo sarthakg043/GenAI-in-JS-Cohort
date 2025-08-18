@@ -22,7 +22,7 @@ async function selectAIProvider() {
   console.log('');
   console.log('Choose your AI provider:');
   console.log('1. OpenAI (GPT-4o-mini)');
-  console.log('2. Google Gemini (gemini-2.5-pro)');
+  console.log(`2. Google Gemini (${process.env.GEMINI_MODEL || 'gemini-2.5-pro'})`);
   console.log('');
 
   const choice = await askQuestion('Select option (1 or 2): ');
@@ -45,7 +45,7 @@ async function selectAIProvider() {
     }
 
     client = new OpenAI({ apiKey });
-    modelName = 'gpt-4o-mini';
+    modelName = process.env.OPENAI_MODEL || 'gpt-4o-mini';
     console.log('✅ OpenAI configured successfully!');
 
   } else if (choice === '2') {
@@ -66,7 +66,7 @@ async function selectAIProvider() {
       apiKey: apiKey,
       baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
     });
-    modelName = 'gemini-2.5-pro';
+    modelName = process.env.GEMINI_MODEL || 'gemini-2.5-pro';
     console.log('✅ Gemini configured successfully!');
 
   } else {

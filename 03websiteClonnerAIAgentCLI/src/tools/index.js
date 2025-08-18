@@ -1,3 +1,16 @@
-import websiteClonner from './websiteClonner';
+import { 
+    cloneWebsite, 
+    listClonedWebsites,
+    serveClonedWebsite, 
+    openWebsiteInBrowser, 
+    checkHttpServerInstalled
+} from './websiteClonner/index.js';
 
-export { websiteClonner };
+
+export {
+    cloneWebsite, 
+    serveClonedWebsite,  
+    openWebsiteInBrowser, 
+    checkHttpServerInstalled,
+    listClonedWebsites
+};

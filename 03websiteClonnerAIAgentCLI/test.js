@@ -10,7 +10,7 @@ async function testOpenAI() {
     });
     
     const response = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
@@ -38,7 +38,7 @@ async function testGemini() {
     });
     
     const response = await client.chat.completions.create({
-      model: 'gemini-2.5-pro',
+      model: process.env.GEMINI_MODEL || 'gemini-2.5-pro',
       messages: [
         {
           role: 'system',

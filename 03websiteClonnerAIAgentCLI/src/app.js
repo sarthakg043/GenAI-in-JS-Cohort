@@ -1,138 +1,12 @@
-import { exec } from 'child_process';
-import { processWebsite } from './tools/websiteClonner/websiteClonner.js';
-import path from 'path';
-import fs from 'fs';
+import { 
+    cloneWebsite, 
+    serveClonedWebsite, 
+    openWebsiteInBrowser, 
+    checkHttpServerInstalled,
+    listClonedWebsites
+} from './tools/index.js';
+import { executeCommand, findAvailablePort } from './utils/index.js';
 
-async function executeCommand(cmd = '') {
-  return new Promise((res, rej) => {
-    exec(cmd, (error, data) => {
-      if (error) {
-        return res(`Error running command: ${error.message}`);
-      } else {
-        res(data);
-      }
-    });
-  });
-}
-
-async function cloneWebsite(websiteUrl = '', outputDir = '', maxPages = 5) {
-  try {
-    // Validate URL
-    new URL(websiteUrl);
-    
-    // Set default output directory if not provided
-    if (!outputDir) {
-      const urlObj = new URL(websiteUrl);
-      const domain = urlObj.hostname.replace(/\./g, '_');
-      outputDir = `./cloned_${domain}`;
-    }
-    
-    console.log(`Starting to clone ${websiteUrl} to ${outputDir} with max ${maxPages} pages...`);
-    
-    // Use the existing processWebsite function
-    await processWebsite(websiteUrl, maxPages, outputDir);
-    
-    return `Successfully cloned ${websiteUrl} to ${outputDir}. You can now serve it using http-server.`;
-  } catch (error) {
-    return `Error cloning website: ${error.message}`;
-  }
-}
-
-async function serveClonedWebsite(outputDir = '', port = 8080) {
-  try {
-    // Check if directory exists
-    if (!fs.existsSync(outputDir)) {
-      return `Error: Directory ${outputDir} does not exist. Please clone a website first.`;
-    }
-    
-    // Check if port is available, if not find next available port
-    const availablePort = await findAvailablePort(port);
-    
-    // Start HTTP server
-    const command = `http-server "${outputDir}" -p ${availablePort} -c-1 --cors`;
-    
-    return new Promise((resolve) => {
-      const serverProcess = exec(command, (error, stdout, stderr) => {
-        if (error) {
-          resolve(`Error starting server: ${error.message}`);
-        }
-      });
-      
-      // Wait a bit for server to start
-      setTimeout(() => {
-        const portMessage = availablePort !== port ? 
-          `(Port ${port} was busy, using ${availablePort} instead)` : '';
-        
-        resolve(`HTTP server started successfully! ${portMessage}
-📡 Server running at: http://localhost:${availablePort}
-📁 Serving directory: ${outputDir}
-🌐 You can now view the cloned website in your browser.
-
-To stop the server, press Ctrl+C in the terminal.`);
-      }, 2000);
-    });
-  } catch (error) {
-    return `Error serving website: ${error.message}`;
-  }
-}
-
-async function findAvailablePort(startPort = 8080) {
-  const net = await import('net');
-  
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    
-    server.listen(startPort, () => {
-      const port = server.address().port;
-      server.close(() => resolve(port));
-    });
-    
-    server.on('error', () => {
-      // Port is busy, try next one
-      resolve(findAvailablePort(startPort + 1));
-    });
-  });
-}
-
-async function openWebsiteInBrowser(url = 'http://localhost:8080') {
-  try {
-    const openCommand = process.platform === 'darwin' ? 'open' : 
-                      process.platform === 'win32' ? 'start' : 'xdg-open';
-    
-    await executeCommand(`${openCommand} ${url}`);
-    return `Opened ${url} in your default browser.`;
-  } catch (error) {
-    return `Error opening browser: ${error.message}`;
-  }
-}
-
-async function checkHttpServerInstalled() {
-  try {
-    const result = await executeCommand('http-server --version');
-    return `http-server is installed: ${result.trim()}`;
-  } catch (error) {
-    return `http-server is not installed. Please install it using: npm install -g http-server`;
-  }
-}
-
-async function listClonedWebsites() {
-  try {
-    const currentDir = process.cwd();
-    const items = fs.readdirSync(currentDir);
-    const clonedDirs = items.filter(item => {
-      const fullPath = path.join(currentDir, item);
-      return fs.statSync(fullPath).isDirectory() && item.startsWith('cloned_');
-    });
-    
-    if (clonedDirs.length === 0) {
-      return 'No cloned websites found in the current directory.';
-    }
-    
-    return `Found ${clonedDirs.length} cloned websites:\n${clonedDirs.map(dir => `- ${dir}`).join('\n')}`;
-  } catch (error) {
-    return `Error listing cloned websites: ${error.message}`;
-  }
-}
 
 const TOOL_MAP = {
   executeCommand: executeCommand,
@@ -297,7 +171,7 @@ async function main(aiClient, modelName) {
           response = await aiClient.chat.completions.create({
             model: modelName,
             messages: messages,
-            temperature: 0.7,
+            temperature: 0,
           });
           console.log(messages);
           rawContent = response.choices[0].message.content;

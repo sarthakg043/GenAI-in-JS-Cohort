@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 
-import { processWebsite } from './websiteClonner.js';
+import { processWebsite, cloneWebsite, listClonedWebsites } from './websiteClonner.js';
+import { 
+    serveClonedWebsite,  
+    openWebsiteInBrowser, 
+    checkHttpServerInstalled 
+} from './serveClonnedWebsite.js';
+
 
 // Function to display usage information
 const showUsage = () => {
@@ -60,7 +66,12 @@ const main = async () => {
         process.exit(1);
     }
 };
-main()
 
 export default main;
-export { processWebsite }
+export { 
+    cloneWebsite, 
+    listClonedWebsites, 
+    serveClonedWebsite, 
+    openWebsiteInBrowser, 
+    checkHttpServerInstalled  
+}

@@ -1575,6 +1575,27 @@ const extractLinks = async (url) => {
     }
 }
 
+async function cloneWebsite(websiteUrl = '', outputDir = '', maxPages = 5) {
+  try {
+    // Validate URL
+    new URL(websiteUrl);
+    
+    // Set default output directory if not provided
+    console.log(`Starting to clone ${websiteUrl} to ${outputDir} with max ${maxPages} pages...`);
+    
+    // Use the existing processWebsite function
+    if (!outputDir) {
+        await processWebsite(websiteUrl, maxPages);
+    }
+    else{
+        await processWebsite(websiteUrl, maxPages, outputDir);
+    }
+    return `Successfully cloned ${websiteUrl} to ${outputDir}. You can now serve it using http-server.`;
+  } catch (error) {
+    return `Error cloning website: ${error.message}`;
+  }
+}
+
 const processWebsite = async (url, maxPages = 5, outputPath= "./output") => {
     try {
         console.log(`Starting to clone website: ${url}`);
@@ -1626,4 +1647,23 @@ const processWebsite = async (url, maxPages = 5, outputPath= "./output") => {
     }
 };
 
-export { processWebsite };
+async function listClonedWebsites() {
+  try {
+    const currentDir = process.cwd();
+    const items = fs.readdirSync(currentDir);
+    const clonedDirs = items.filter(item => {
+      const fullPath = path.join(currentDir, item);
+      return fs.statSync(fullPath).isDirectory() && item.startsWith('cloned_');
+    });
+    
+    if (clonedDirs.length === 0) {
+      return 'No cloned websites found in the current directory.';
+    }
+    
+    return `Found ${clonedDirs.length} cloned websites:\n${clonedDirs.map(dir => `- ${dir}`).join('\n')}`;
+  } catch (error) {
+    return `Error listing cloned websites: ${error.message}`;
+  }
+}
+
+export { processWebsite, cloneWebsite, listClonedWebsites };
