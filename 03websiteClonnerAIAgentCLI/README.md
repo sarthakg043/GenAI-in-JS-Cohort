@@ -12,6 +12,7 @@ A powerful command-line tool to clone Next.js websites for offline viewing. This
 - **Background Image Support** - Extracts and downloads CSS background images
 - **Configurable Output** - Custom output directories and page limits
 - **Local Server Integration** - Automatically serves cloned websites
+- **🤖 AI Agent Interface** - Conversational AI assistant for website cloning
 
 ## 🛠️ Installation
 
@@ -38,9 +39,39 @@ npm install
 npm install -g http-server
 ```
 
+### Step 5: Setup Environment Variables (for AI Agent)
+```bash
+cp .env.example .env
+# Edit .env and add your OpenAI API key
+```
+
 ## 🚀 Usage
 
-### Command Syntax
+### 🤖 AI Agent Mode (Recommended)
+The AI agent provides a conversational interface for website cloning:
+
+```bash
+npm run start:ai
+```
+
+**Example conversations:**
+```
+👤 You: Clone hitesh.ai and show it to me
+🤖 AI: I'll clone hitesh.ai, serve it locally, and open it in your browser!
+
+👤 You: Clone piyushgarg.dev with 10 pages to ./piyush-site
+🤖 AI: I'll clone piyushgarg.dev with 10 pages to your custom directory!
+
+👤 You: List my cloned websites
+🤖 AI: Here are all your cloned websites...
+
+👤 You: Serve my cloned website from ./cloned_hitesh_ai
+🤖 AI: Starting HTTP server for your cloned website...
+```
+
+### 📋 Manual CLI Mode
+For direct command-line usage:
+
 ```bash
 node src/tools/websiteClonner/index.js <website-url> [output-path] [max-pages]
 ```

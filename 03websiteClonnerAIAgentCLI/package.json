@@ -1,7 +1,7 @@
 {
   "name": "03websiteclonneraiagentcli",
   "version": "1.0.0",
-  "description": "A CLI tool to clone websites for offline viewing",
+  "description": "A CLI tool to clone websites for offline viewing with AI assistant",
   "license": "ISC",
   "author": "",
   "type": "module",
@@ -11,10 +11,14 @@
   },
   "scripts": {
     "start": "node index.js",
+    "start:ai": "node index.js",
+    "start:manual": "node src/tools/websiteClonner/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "axios": "^1.11.0",
-    "cheerio": "^1.1.2"
+    "cheerio": "^1.1.2",
+    "dotenv": "^17.2.1",
+    "openai": "^5.12.2"
   }
 }
